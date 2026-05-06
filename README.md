@@ -32,12 +32,20 @@ The popular alternatives are heavy (LangChain) or commercial-tier (LiteLLM enter
 
 ## Install
 
-Not on PyPI yet. Install from GitHub:
+Requires Python 3.11+. Not on PyPI yet — install from GitHub:
 
 ```bash
 uv pip install git+https://github.com/akaddo97/llm-providers
 # or
 pip install git+https://github.com/akaddo97/llm-providers
+```
+
+**macOS users** — if your `python3` on PATH is Homebrew Python 3.13 or 3.14, `uv` may refuse with `platform.mac_ver()` returned an empty value. Use Python 3.12 explicitly via a venv:
+
+```bash
+uv venv --python /opt/homebrew/opt/python@3.12/bin/python3.12 .venv
+source .venv/bin/activate
+uv pip install git+https://github.com/akaddo97/llm-providers
 ```
 
 Set the keys you'll use:
