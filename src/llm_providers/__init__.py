@@ -76,6 +76,7 @@ class Provider(Protocol):
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]: ...
 
     def complete(
@@ -124,6 +125,7 @@ class ClaudeProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         client = self._ensure_client()
         # Normalize system → blocks with ephemeral cache_control. Caching
@@ -145,6 +147,8 @@ class ClaudeProvider:
         }
         if tools:
             kwargs["tools"] = tools
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         with client.messages.stream(**kwargs) as stream:
             current_tool: dict | None = None
@@ -319,6 +323,7 @@ class GeminiProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         if tools:
             # v1 scope: text-only streaming. Tool-using sites should route
@@ -333,6 +338,8 @@ class GeminiProvider:
         sys_text = self._system_text(system)
         if sys_text:
             cfg_kwargs["system_instruction"] = sys_text
+        if temperature is not None:
+            cfg_kwargs["temperature"] = temperature
 
         stream = client.models.generate_content_stream(
             model=self.model,
@@ -462,6 +469,7 @@ class OpenAIProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         client = self._ensure_client()
         kwargs: dict = {
@@ -473,6 +481,8 @@ class OpenAIProvider:
         }
         if tools:
             kwargs["tools"] = self._translate_tools(tools)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         # Track in-progress tool calls by index — OpenAI deltas reference
         # the same tool by index across chunks.

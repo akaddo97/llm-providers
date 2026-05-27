@@ -121,6 +121,59 @@ def test_claude_complete_no_system_omits_field(monkeypatch):
     assert "system" not in fake.last_kwargs
 
 
+class _FakeClaudeStreamCtx:
+    """Minimal context-manager mock for client.messages.stream(**kwargs).
+
+    Yields a single message_stop event so ClaudeProvider.chat() runs to
+    completion without producing any text / tool chunks. Captures the
+    kwargs the stream was called with so tests can assert pass-through.
+    """
+    def __init__(self):
+        self.events = [SimpleNamespace(type="message_stop")]
+    def __enter__(self):
+        return self
+    def __iter__(self):
+        return iter(self.events)
+    def __exit__(self, *a):
+        return False
+    def get_final_message(self):
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+        )
+
+
+class _FakeAnthropicStreamingClient:
+    def __init__(self, api_key=None):
+        self.last_stream_kwargs = None
+        self.messages = SimpleNamespace(stream=self._stream)
+    def _stream(self, **kwargs):
+        self.last_stream_kwargs = kwargs
+        return _FakeClaudeStreamCtx()
+
+
+def test_claude_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicStreamingClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.3,
+    ))
+    assert fake.last_stream_kwargs["temperature"] == 0.3
+
+
+def test_claude_chat_omits_temperature_when_none(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicStreamingClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    list(prov.chat(messages=[{"role": "user", "content": "hi"}], system=""))
+    assert "temperature" not in fake.last_stream_kwargs
+
+
 # --- GeminiProvider ---
 
 
@@ -204,6 +257,20 @@ def test_gemini_chat_text_streaming_yields_canonical_chunks(monkeypatch):
     assert "".join(c["text"] for c in text_chunks) == "hello world"
     assert len(stop_chunks) == 1
     assert stop_chunks[0]["usage"] == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_gemini_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    fake = _FakeGeminiClient()
+    monkeypatch.setattr("google.genai.Client", lambda **kw: fake)
+    prov = p.GeminiProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.7,
+    ))
+    config = fake.models.last_stream_kwargs["config"]
+    assert config.temperature == 0.7
 
 
 def test_gemini_chat_with_tools_raises_not_implemented(monkeypatch):
@@ -346,6 +413,28 @@ def test_openai_chat_with_tools_translates_schema(monkeypatch):
             "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
         },
     }]
+
+
+def test_openai_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake = _FakeOpenAIClient(stream_chunks=[_openai_finish_chunk()])
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.9,
+    ))
+    assert fake.chat.completions.last_kwargs["temperature"] == 0.9
+
+
+def test_openai_chat_omits_temperature_when_none(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake = _FakeOpenAIClient(stream_chunks=[_openai_finish_chunk()])
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    list(prov.chat(messages=[{"role": "user", "content": "hi"}], system=""))
+    assert "temperature" not in fake.chat.completions.last_kwargs
 
 
 def test_openai_chat_tool_args_before_name_yields_start_before_input(monkeypatch):
