@@ -36,12 +36,12 @@ The popular alternatives are heavy (LangChain) or commercial-tier (LiteLLM enter
 
 ## Install
 
-Requires Python 3.11+. Not on PyPI yet — install from GitHub:
+Requires Python 3.11+. Not on PyPI yet — install directly from GitHub with `pip` or `uv`:
 
 ```bash
-uv pip install git+https://github.com/akaddo97/llm-providers
-# or
 pip install git+https://github.com/akaddo97/llm-providers
+# or
+uv pip install git+https://github.com/akaddo97/llm-providers
 ```
 
 **macOS users** — if your `python3` on PATH is Homebrew Python 3.13 or 3.14, `uv` may refuse with `platform.mac_ver()` returned an empty value. Use Python 3.12 explicitly via a venv:
@@ -120,6 +120,8 @@ text = prov.complete(
 
 System prompt translation, message-role translation (`assistant` → `model` for Gemini, system message prepending for OpenAI), and tool-schema translation all happen inside the provider. Callers see one shape.
 
+29 tests, three Python versions in CI, fully mocked — `pytest tests/` runs offline.
+
 ## Limits
 
 - **Gemini tool-use:** v0.1 supports text-only streaming on Gemini. `chat()` with `tools=[...]` raises `NotImplementedError`. Route tool-using sites to Claude or OpenAI for now.
@@ -128,7 +130,7 @@ System prompt translation, message-role translation (`assistant` → `model` for
 
 ## Versioning
 
-`0.1.x` — API may shift between minor versions until `1.0`. Pin if you depend on it.
+`0.1.x` — API may shift between minor versions until `1.0`. Pin if you depend on it. PyPI publication is open as a `0.2` milestone; until then the package installs directly from GitHub.
 
 ## License
 
