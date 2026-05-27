@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.4"]
 
 [project.urls]
 Homepage = "https://github.com/akaddo97/llm-providers"
@@ -39,3 +39,7 @@ packages = ["src/llm_providers"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
