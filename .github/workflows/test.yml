@@ -19,6 +19,13 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install uv
         run: pip install uv
+      - name: Cache uv downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py${{ matrix.python }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            uv-${{ runner.os }}-py${{ matrix.python }}-
       - name: Install package + dev deps
         run: uv pip install --system -e ".[dev]"
       - name: Lint with ruff
