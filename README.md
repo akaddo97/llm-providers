@@ -96,6 +96,14 @@ for chunk in prov.chat(
 
 Tool definitions use the Anthropic shape `{name, description, input_schema}`. Each provider translates internally.
 
+## Provider capability matrix
+
+| Provider | `complete()` | `chat()` streaming | Tool-use streaming | Prompt caching |
+|---|---|---|---|---|
+| Claude (Anthropic) | ✓ | ✓ | ✓ | ✓ (ephemeral, system block) |
+| Gemini (Google) | ✓ | ✓ (text only) | ✗ (v0.1 limit — see `## Limits`) | — |
+| OpenAI | ✓ | ✓ | ✓ | server-side (not surfaced in usage chunk) |
+
 ## Single-shot completion
 
 `Provider.complete()` is the sync, no-streaming, no-tools shape — for cleanup, classification, summarisation, anywhere you want a string back:
