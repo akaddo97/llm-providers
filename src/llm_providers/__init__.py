@@ -65,9 +65,20 @@ __all__ = [
     "ClaudeProvider",
     "GeminiProvider",
     "OpenAIProvider",
+    "CLAUDE_DEFAULT_MODEL",
+    "GEMINI_DEFAULT_MODEL",
+    "OPENAI_DEFAULT_MODEL",
     "get_provider",
     "default_provider_name",
 ]
+
+
+# Default model per provider. Bump these as providers ship new flagships;
+# they're centralised so callers can also `from llm_providers import
+# CLAUDE_DEFAULT_MODEL` if they want the same default at their boundary.
+CLAUDE_DEFAULT_MODEL = "claude-sonnet-4-6"
+GEMINI_DEFAULT_MODEL = "gemini-2.5-pro"
+OPENAI_DEFAULT_MODEL = "gpt-4o"
 
 
 # Canonical stop_reason vocabulary — see module docstring.
@@ -162,7 +173,7 @@ class ClaudeProvider:
 
     def __init__(
         self,
-        model: str = "claude-sonnet-4-6",
+        model: str = CLAUDE_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
@@ -301,7 +312,7 @@ class GeminiProvider:
 
     def __init__(
         self,
-        model: str = "gemini-2.5-pro",
+        model: str = GEMINI_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
@@ -434,7 +445,7 @@ class OpenAIProvider:
 
     def __init__(
         self,
-        model: str = "gpt-4o",
+        model: str = OPENAI_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
