@@ -30,10 +30,20 @@ from __future__ import annotations
 
 import json
 import os
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Iterator, Protocol, TypedDict
 
 
+try:
+    __version__ = _pkg_version("llm-providers")
+except PackageNotFoundError:
+    # Editable install without metadata, or local-source import without
+    # `pip install -e .` — fall back to the in-tree version constant.
+    __version__ = "0.1.0"
+
+
 __all__ = [
+    "__version__",
     "Provider",
     "Message",
     "Tool",
@@ -211,10 +221,9 @@ class ClaudeProvider:
         if system:
             # No cache_control on complete() — single-shot calls don't
             # repeat the system prompt across turns, so caching has no payoff.
-            if isinstance(system, str):
-                kwargs["system"] = system
-            else:
-                kwargs["system"] = system
+            # String and block-list system prompts pass through as-is; the
+            # Anthropic SDK accepts both shapes natively.
+            kwargs["system"] = system
         if temperature is not None:
             kwargs["temperature"] = temperature
         response = client.messages.create(**kwargs)
