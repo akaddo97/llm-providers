@@ -51,6 +51,37 @@ def test_get_provider_unknown_raises():
         p.get_provider("nonexistent_xyz")
 
 
+# --- stop_reason canonical normalisation ---
+
+
+def test_stop_reason_normalised_cross_provider():
+    norm = p._normalize_stop_reason
+    # Claude mappings
+    assert norm("claude", "end_turn") == "end_turn"
+    assert norm("claude", "stop_sequence") == "end_turn"
+    assert norm("claude", "tool_use") == "tool_use"
+    assert norm("claude", "max_tokens") == "max_tokens"
+    assert norm("claude", "refusal") == "safety"
+    assert norm("claude", "pause_turn") == "other"
+    # Gemini mappings
+    assert norm("gemini", "stop") == "end_turn"
+    assert norm("gemini", "max_tokens") == "max_tokens"
+    assert norm("gemini", "safety") == "safety"
+    assert norm("gemini", "recitation") == "safety"
+    assert norm("gemini", "prohibited_content") == "safety"
+    assert norm("gemini", "language") == "other"
+    # OpenAI mappings
+    assert norm("openai", "stop") == "end_turn"
+    assert norm("openai", "tool_calls") == "tool_use"
+    assert norm("openai", "function_call") == "tool_use"
+    assert norm("openai", "length") == "max_tokens"
+    assert norm("openai", "content_filter") == "safety"
+    # Catch-alls
+    assert norm("claude", "weird_new_value") == "other"
+    assert norm("openai", None) == "other"
+    assert norm("unknown_provider", "stop") == "other"
+
+
 # --- ClaudeProvider ---
 
 

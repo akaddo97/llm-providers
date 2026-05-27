@@ -14,6 +14,21 @@ Streaming chunk contract (every Provider.chat() yields these dicts):
   {"type": "tool_use_end",   "tool": {"id", "name", "input": {...parsed...}}}
   {"type": "stop", "stop_reason": str, "usage": {input_tokens, output_tokens, ...}}
 
+`stop_reason` is normalised across providers to one of:
+
+  - "end_turn"   — model finished naturally (also Claude `stop_sequence`,
+                   OpenAI `stop`, Gemini `stop`).
+  - "tool_use"   — model wants to invoke a tool (OpenAI `tool_calls`,
+                   `function_call`).
+  - "max_tokens" — hit the token cap (OpenAI `length`).
+  - "safety"     — content / safety filter blocked (Claude `refusal`,
+                   Gemini `recitation` / `blocklist` / `prohibited_content`
+                   / `spii`, OpenAI `content_filter`).
+  - "other"      — anything else (unknown values, Gemini `language`,
+                   Claude `pause_turn`).
+
+Callers can branch on this canonical set without provider-name checks.
+
 Routes can forward these chunks to the browser as SSE without knowing which
 provider produced them. tool_use_end carries the fully-parsed input so the
 route can execute the tool without rebuilding JSON.
@@ -53,6 +68,50 @@ __all__ = [
     "get_provider",
     "default_provider_name",
 ]
+
+
+# Canonical stop_reason vocabulary — see module docstring.
+_STOP_END_TURN = "end_turn"
+_STOP_TOOL_USE = "tool_use"
+_STOP_MAX_TOKENS = "max_tokens"
+_STOP_SAFETY = "safety"
+_STOP_OTHER = "other"
+
+_STOP_MAPS: dict[str, dict[str, str]] = {
+    "claude": {
+        "end_turn": _STOP_END_TURN,
+        "stop_sequence": _STOP_END_TURN,
+        "tool_use": _STOP_TOOL_USE,
+        "max_tokens": _STOP_MAX_TOKENS,
+        "refusal": _STOP_SAFETY,
+        "pause_turn": _STOP_OTHER,
+    },
+    "gemini": {
+        "stop": _STOP_END_TURN,
+        "max_tokens": _STOP_MAX_TOKENS,
+        "safety": _STOP_SAFETY,
+        "recitation": _STOP_SAFETY,
+        "blocklist": _STOP_SAFETY,
+        "prohibited_content": _STOP_SAFETY,
+        "spii": _STOP_SAFETY,
+        "language": _STOP_OTHER,
+        "other": _STOP_OTHER,
+        "malformed_function_call": _STOP_OTHER,
+    },
+    "openai": {
+        "stop": _STOP_END_TURN,
+        "length": _STOP_MAX_TOKENS,
+        "tool_calls": _STOP_TOOL_USE,
+        "function_call": _STOP_TOOL_USE,
+        "content_filter": _STOP_SAFETY,
+    },
+}
+
+
+def _normalize_stop_reason(provider: str, raw: str | None) -> str:
+    if raw is None:
+        return _STOP_OTHER
+    return _STOP_MAPS.get(provider, {}).get(str(raw).lower(), _STOP_OTHER)
 
 
 class Message(TypedDict, total=False):
@@ -205,7 +264,7 @@ class ClaudeProvider:
                         usage["cache_read_input_tokens"] = final.usage.cache_read_input_tokens or 0
                     yield {
                         "type": "stop",
-                        "stop_reason": final.stop_reason,
+                        "stop_reason": _normalize_stop_reason("claude", final.stop_reason),
                         "usage": usage,
                     }
 
@@ -347,7 +406,7 @@ class GeminiProvider:
             config=types.GenerateContentConfig(**cfg_kwargs),
         )
         usage_meta = None
-        stop_reason = "end_turn"
+        stop_reason = _STOP_END_TURN
         for chunk in stream:
             if getattr(chunk, "text", None):
                 yield {"type": "text", "text": chunk.text}
@@ -357,7 +416,8 @@ class GeminiProvider:
             for cand in cands:
                 fr = getattr(cand, "finish_reason", None)
                 if fr is not None:
-                    stop_reason = str(fr).lower().split(".")[-1] or stop_reason
+                    raw_tail = str(fr).lower().split(".")[-1]
+                    stop_reason = _normalize_stop_reason("gemini", raw_tail)
 
         usage = {"input_tokens": 0, "output_tokens": 0}
         if usage_meta is not None:
@@ -487,7 +547,7 @@ class OpenAIProvider:
         # Track in-progress tool calls by index — OpenAI deltas reference
         # the same tool by index across chunks.
         tool_calls: dict[int, dict] = {}
-        stop_reason = "end_turn"
+        stop_reason = _STOP_END_TURN
         usage = {"input_tokens": 0, "output_tokens": 0}
 
         for chunk in client.chat.completions.create(**kwargs):
@@ -548,10 +608,7 @@ class OpenAIProvider:
                             }
             fr = getattr(choice, "finish_reason", None)
             if fr is not None:
-                # Map OpenAI finish_reason → canonical stop_reason naming
-                stop_reason = "tool_use" if fr == "tool_calls" else (
-                    "end_turn" if fr == "stop" else fr
-                )
+                stop_reason = _normalize_stop_reason("openai", fr)
 
         # Close out any in-progress tool calls.
         for tc in tool_calls.values():
