@@ -500,14 +500,20 @@ class OpenAIProvider:
                             "input_json": "",
                         }
                     fn = getattr(tc, "function", None)
-                    if fn is not None:
-                        if getattr(fn, "name", None):
-                            tool_calls[idx]["name"] = fn.name
-                        if getattr(fn, "arguments", None):
-                            tool_calls[idx]["input_json"] += fn.arguments
+                    # Update id + name first so the start check below sees the
+                    # latest state; defer accumulating THIS delta's args until
+                    # after the start check, so the flush below carries only
+                    # args from PREVIOUS deltas.
+                    if fn is not None and getattr(fn, "name", None):
+                        tool_calls[idx]["name"] = fn.name
                     if getattr(tc, "id", None):
                         tool_calls[idx]["id"] = tc.id
-                    # Emit start once we have id+name; emit input deltas as args stream.
+                    # Emit start once we have id+name. Spec requires tool_use_start
+                    # before any tool_use_input for a given tool; if args arrived
+                    # in earlier deltas before name (OpenAI doesn't do this today,
+                    # but the SDK doesn't promise the ordering), flush them now
+                    # as a single tool_use_input so consumers see a continuous
+                    # JSON stream.
                     if not tool_calls[idx].get("_started") and tool_calls[idx]["id"] and tool_calls[idx]["name"]:
                         tool_calls[idx]["_started"] = True
                         yield {
@@ -518,11 +524,18 @@ class OpenAIProvider:
                                 "input_json": "",
                             },
                         }
+                        if tool_calls[idx]["input_json"]:
+                            yield {
+                                "type": "tool_use_input",
+                                "partial_json": tool_calls[idx]["input_json"],
+                            }
                     if fn is not None and getattr(fn, "arguments", None):
-                        yield {
-                            "type": "tool_use_input",
-                            "partial_json": fn.arguments,
-                        }
+                        tool_calls[idx]["input_json"] += fn.arguments
+                        if tool_calls[idx].get("_started"):
+                            yield {
+                                "type": "tool_use_input",
+                                "partial_json": fn.arguments,
+                            }
             fr = getattr(choice, "finish_reason", None)
             if fr is not None:
                 # Map OpenAI finish_reason → canonical stop_reason naming

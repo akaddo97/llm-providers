@@ -348,6 +348,62 @@ def test_openai_chat_with_tools_translates_schema(monkeypatch):
     }]
 
 
+def test_openai_chat_tool_args_before_name_yields_start_before_input(monkeypatch):
+    """Regression: if args arrive before name, tool_use_start must still
+    precede any tool_use_input chunk. The pre-name args are flushed as a
+    single tool_use_input the moment start fires."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # Delta 1: id set, no name, args partial (the problem case).
+    tc_args_first = SimpleNamespace(
+        index=0, id="call_xyz",
+        function=SimpleNamespace(name=None, arguments='{"q":"hello"}'),
+    )
+    # Delta 2: name arrives, no more args.
+    tc_name_later = SimpleNamespace(
+        index=0, id=None,
+        function=SimpleNamespace(name="search", arguments=""),
+    )
+    chunks_in = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[tc_args_first]),
+                finish_reason=None,
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[tc_name_later]),
+                finish_reason=None,
+            )],
+            usage=None,
+        ),
+        _openai_finish_chunk(reason="tool_calls"),
+    ]
+    fake = _FakeOpenAIClient(stream_chunks=chunks_in)
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    out = list(prov.chat(
+        messages=[{"role": "user", "content": "x"}],
+        system="",
+        tools=[{"name": "search", "description": "d", "input_schema": {}}],
+    ))
+    types_in_order = [c["type"] for c in out]
+    # Must see start before any input — contract invariant.
+    first_start = types_in_order.index("tool_use_start")
+    first_input = types_in_order.index("tool_use_input")
+    assert first_start < first_input, f"start must precede input; got {types_in_order}"
+    starts = [c for c in out if c["type"] == "tool_use_start"]
+    inputs = [c for c in out if c["type"] == "tool_use_input"]
+    ends = [c for c in out if c["type"] == "tool_use_end"]
+    assert len(starts) == 1
+    assert starts[0]["tool"]["name"] == "search"
+    assert starts[0]["tool"]["id"] == "call_xyz"
+    # Buffered args flushed as one input chunk; reconstructable JSON.
+    assert "".join(c["partial_json"] for c in inputs) == '{"q":"hello"}'
+    assert ends[0]["tool"]["input"] == {"q": "hello"}
+
+
 def test_openai_chat_tool_use_streaming_yields_canonical_chunks(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     # Simulate OpenAI's streaming tool-call deltas:
