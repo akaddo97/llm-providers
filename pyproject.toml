@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lightweight Protocol-based abstraction for LLM providers (Claude / Gemini / OpenAI). Streaming chat with tool-use translation + sync single-shot completion."
 readme = "README.md"
 license = "MIT"
-authors = [{name = "Addo-Kwabena Addo", email = "akaddo97@gmail.com"}]
+authors = [{name = "Addo-Kwabena Addo", email = "28944829+akaddo97@users.noreply.github.com"}]
 requires-python = ">=3.11"
 keywords = ["llm", "anthropic", "openai", "gemini", "streaming", "tool-use", "protocol"]
 classifiers = [
@@ -21,9 +21,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "anthropic>=0.40",
-    "google-genai>=1.0",
-    "openai>=1.40",
+    "anthropic>=0.40,<1",
+    "google-genai>=1.0,<2",
+    "openai>=1.40,<2",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +31,7 @@ dev = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://github.com/akaddo97/llm-providers"
+Repository = "https://github.com/akaddo97/llm-providers"
 Issues = "https://github.com/akaddo97/llm-providers/issues"
 
 [tool.hatch.build.targets.wheel]
