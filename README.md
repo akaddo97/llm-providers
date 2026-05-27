@@ -128,7 +128,7 @@ text = prov.complete(
 
 System prompt translation, message-role translation (`assistant` → `model` for Gemini, system message prepending for OpenAI), and tool-schema translation all happen inside the provider. Callers see one shape.
 
-29 tests, three Python versions in CI, fully mocked — `pytest tests/` runs offline.
+35 tests, three Python versions in CI, fully mocked — `pytest tests/` runs offline.
 
 ## Limits
 
