@@ -152,6 +152,22 @@ def test_claude_complete_no_system_omits_field(monkeypatch):
     assert "system" not in fake.last_kwargs
 
 
+def test_claude_complete_passes_list_system_unchanged(monkeypatch):
+    """system can be a list of Anthropic content blocks — passes through
+    to the SDK without flattening. Covers the path the dead branch in
+    pre-cleanup code obscured."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    blocks = [
+        {"type": "text", "text": "you are concise"},
+        {"type": "text", "text": "also be polite"},
+    ]
+    prov.complete(messages=[{"role": "user", "content": "hi"}], system=blocks)
+    assert fake.last_kwargs["system"] == blocks
+
+
 class _FakeClaudeStreamCtx:
     """Minimal context-manager mock for client.messages.stream(**kwargs).
 
