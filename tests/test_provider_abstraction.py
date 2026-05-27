@@ -10,7 +10,6 @@ Covers:
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -49,6 +48,37 @@ def test_get_provider_no_name_uses_env_default(monkeypatch):
 def test_get_provider_unknown_raises():
     with pytest.raises(ValueError, match="unknown provider"):
         p.get_provider("nonexistent_xyz")
+
+
+# --- stop_reason canonical normalisation ---
+
+
+def test_stop_reason_normalised_cross_provider():
+    norm = p._normalize_stop_reason
+    # Claude mappings
+    assert norm("claude", "end_turn") == "end_turn"
+    assert norm("claude", "stop_sequence") == "end_turn"
+    assert norm("claude", "tool_use") == "tool_use"
+    assert norm("claude", "max_tokens") == "max_tokens"
+    assert norm("claude", "refusal") == "safety"
+    assert norm("claude", "pause_turn") == "other"
+    # Gemini mappings
+    assert norm("gemini", "stop") == "end_turn"
+    assert norm("gemini", "max_tokens") == "max_tokens"
+    assert norm("gemini", "safety") == "safety"
+    assert norm("gemini", "recitation") == "safety"
+    assert norm("gemini", "prohibited_content") == "safety"
+    assert norm("gemini", "language") == "other"
+    # OpenAI mappings
+    assert norm("openai", "stop") == "end_turn"
+    assert norm("openai", "tool_calls") == "tool_use"
+    assert norm("openai", "function_call") == "tool_use"
+    assert norm("openai", "length") == "max_tokens"
+    assert norm("openai", "content_filter") == "safety"
+    # Catch-alls
+    assert norm("claude", "weird_new_value") == "other"
+    assert norm("openai", None) == "other"
+    assert norm("unknown_provider", "stop") == "other"
 
 
 # --- ClaudeProvider ---
@@ -119,6 +149,75 @@ def test_claude_complete_no_system_omits_field(monkeypatch):
     prov = p.ClaudeProvider()
     prov.complete(messages=[{"role": "user", "content": "hi"}])
     assert "system" not in fake.last_kwargs
+
+
+def test_claude_complete_passes_list_system_unchanged(monkeypatch):
+    """system can be a list of Anthropic content blocks — passes through
+    to the SDK without flattening. Covers the path the dead branch in
+    pre-cleanup code obscured."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    blocks = [
+        {"type": "text", "text": "you are concise"},
+        {"type": "text", "text": "also be polite"},
+    ]
+    prov.complete(messages=[{"role": "user", "content": "hi"}], system=blocks)
+    assert fake.last_kwargs["system"] == blocks
+
+
+class _FakeClaudeStreamCtx:
+    """Minimal context-manager mock for client.messages.stream(**kwargs).
+
+    Yields a single message_stop event so ClaudeProvider.chat() runs to
+    completion without producing any text / tool chunks. Captures the
+    kwargs the stream was called with so tests can assert pass-through.
+    """
+    def __init__(self):
+        self.events = [SimpleNamespace(type="message_stop")]
+    def __enter__(self):
+        return self
+    def __iter__(self):
+        return iter(self.events)
+    def __exit__(self, *a):
+        return False
+    def get_final_message(self):
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+        )
+
+
+class _FakeAnthropicStreamingClient:
+    def __init__(self, api_key=None):
+        self.last_stream_kwargs = None
+        self.messages = SimpleNamespace(stream=self._stream)
+    def _stream(self, **kwargs):
+        self.last_stream_kwargs = kwargs
+        return _FakeClaudeStreamCtx()
+
+
+def test_claude_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicStreamingClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.3,
+    ))
+    assert fake.last_stream_kwargs["temperature"] == 0.3
+
+
+def test_claude_chat_omits_temperature_when_none(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    fake = _FakeAnthropicStreamingClient()
+    monkeypatch.setattr("anthropic.Anthropic", lambda **kw: fake)
+    prov = p.ClaudeProvider()
+    list(prov.chat(messages=[{"role": "user", "content": "hi"}], system=""))
+    assert "temperature" not in fake.last_stream_kwargs
 
 
 # --- GeminiProvider ---
@@ -204,6 +303,20 @@ def test_gemini_chat_text_streaming_yields_canonical_chunks(monkeypatch):
     assert "".join(c["text"] for c in text_chunks) == "hello world"
     assert len(stop_chunks) == 1
     assert stop_chunks[0]["usage"] == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_gemini_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    fake = _FakeGeminiClient()
+    monkeypatch.setattr("google.genai.Client", lambda **kw: fake)
+    prov = p.GeminiProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.7,
+    ))
+    config = fake.models.last_stream_kwargs["config"]
+    assert config.temperature == 0.7
 
 
 def test_gemini_chat_with_tools_raises_not_implemented(monkeypatch):
@@ -346,6 +459,84 @@ def test_openai_chat_with_tools_translates_schema(monkeypatch):
             "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
         },
     }]
+
+
+def test_openai_chat_passes_temperature_when_set(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake = _FakeOpenAIClient(stream_chunks=[_openai_finish_chunk()])
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    list(prov.chat(
+        messages=[{"role": "user", "content": "hi"}],
+        system="be brief",
+        temperature=0.9,
+    ))
+    assert fake.chat.completions.last_kwargs["temperature"] == 0.9
+
+
+def test_openai_chat_omits_temperature_when_none(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    fake = _FakeOpenAIClient(stream_chunks=[_openai_finish_chunk()])
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    list(prov.chat(messages=[{"role": "user", "content": "hi"}], system=""))
+    assert "temperature" not in fake.chat.completions.last_kwargs
+
+
+def test_openai_chat_tool_args_before_name_yields_start_before_input(monkeypatch):
+    """Regression: if args arrive before name, tool_use_start must still
+    precede any tool_use_input chunk. The pre-name args are flushed as a
+    single tool_use_input the moment start fires."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    # Delta 1: id set, no name, args partial (the problem case).
+    tc_args_first = SimpleNamespace(
+        index=0, id="call_xyz",
+        function=SimpleNamespace(name=None, arguments='{"q":"hello"}'),
+    )
+    # Delta 2: name arrives, no more args.
+    tc_name_later = SimpleNamespace(
+        index=0, id=None,
+        function=SimpleNamespace(name="search", arguments=""),
+    )
+    chunks_in = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[tc_args_first]),
+                finish_reason=None,
+            )],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[tc_name_later]),
+                finish_reason=None,
+            )],
+            usage=None,
+        ),
+        _openai_finish_chunk(reason="tool_calls"),
+    ]
+    fake = _FakeOpenAIClient(stream_chunks=chunks_in)
+    monkeypatch.setattr("openai.OpenAI", lambda **kw: fake)
+    prov = p.OpenAIProvider()
+    out = list(prov.chat(
+        messages=[{"role": "user", "content": "x"}],
+        system="",
+        tools=[{"name": "search", "description": "d", "input_schema": {}}],
+    ))
+    types_in_order = [c["type"] for c in out]
+    # Must see start before any input — contract invariant.
+    first_start = types_in_order.index("tool_use_start")
+    first_input = types_in_order.index("tool_use_input")
+    assert first_start < first_input, f"start must precede input; got {types_in_order}"
+    starts = [c for c in out if c["type"] == "tool_use_start"]
+    inputs = [c for c in out if c["type"] == "tool_use_input"]
+    ends = [c for c in out if c["type"] == "tool_use_end"]
+    assert len(starts) == 1
+    assert starts[0]["tool"]["name"] == "search"
+    assert starts[0]["tool"]["id"] == "call_xyz"
+    # Buffered args flushed as one input chunk; reconstructable JSON.
+    assert "".join(c["partial_json"] for c in inputs) == '{"q":"hello"}'
+    assert ends[0]["tool"]["input"] == {"q": "hello"}
 
 
 def test_openai_chat_tool_use_streaming_yields_canonical_chunks(monkeypatch):

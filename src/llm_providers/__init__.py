@@ -14,6 +14,21 @@ Streaming chunk contract (every Provider.chat() yields these dicts):
   {"type": "tool_use_end",   "tool": {"id", "name", "input": {...parsed...}}}
   {"type": "stop", "stop_reason": str, "usage": {input_tokens, output_tokens, ...}}
 
+`stop_reason` is normalised across providers to one of:
+
+  - "end_turn"   — model finished naturally (also Claude `stop_sequence`,
+                   OpenAI `stop`, Gemini `stop`).
+  - "tool_use"   — model wants to invoke a tool (OpenAI `tool_calls`,
+                   `function_call`).
+  - "max_tokens" — hit the token cap (OpenAI `length`).
+  - "safety"     — content / safety filter blocked (Claude `refusal`,
+                   Gemini `recitation` / `blocklist` / `prohibited_content`
+                   / `spii`, OpenAI `content_filter`).
+  - "other"      — anything else (unknown values, Gemini `language`,
+                   Claude `pause_turn`).
+
+Callers can branch on this canonical set without provider-name checks.
+
 Routes can forward these chunks to the browser as SSE without knowing which
 provider produced them. tool_use_end carries the fully-parsed input so the
 route can execute the tool without rebuilding JSON.
@@ -30,19 +45,84 @@ from __future__ import annotations
 
 import json
 import os
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Iterator, Protocol, TypedDict
 
 
+try:
+    __version__ = _pkg_version("llm-providers")
+except PackageNotFoundError:
+    # Editable install without metadata, or local-source import without
+    # `pip install -e .` — fall back to the in-tree version constant.
+    __version__ = "0.1.0"
+
+
 __all__ = [
+    "__version__",
     "Provider",
     "Message",
     "Tool",
     "ClaudeProvider",
     "GeminiProvider",
     "OpenAIProvider",
+    "CLAUDE_DEFAULT_MODEL",
+    "GEMINI_DEFAULT_MODEL",
+    "OPENAI_DEFAULT_MODEL",
     "get_provider",
     "default_provider_name",
 ]
+
+
+# Default model per provider. Bump these as providers ship new flagships;
+# they're centralised so callers can also `from llm_providers import
+# CLAUDE_DEFAULT_MODEL` if they want the same default at their boundary.
+CLAUDE_DEFAULT_MODEL = "claude-sonnet-4-6"
+GEMINI_DEFAULT_MODEL = "gemini-2.5-pro"
+OPENAI_DEFAULT_MODEL = "gpt-4o"
+
+
+# Canonical stop_reason vocabulary — see module docstring.
+_STOP_END_TURN = "end_turn"
+_STOP_TOOL_USE = "tool_use"
+_STOP_MAX_TOKENS = "max_tokens"
+_STOP_SAFETY = "safety"
+_STOP_OTHER = "other"
+
+_STOP_MAPS: dict[str, dict[str, str]] = {
+    "claude": {
+        "end_turn": _STOP_END_TURN,
+        "stop_sequence": _STOP_END_TURN,
+        "tool_use": _STOP_TOOL_USE,
+        "max_tokens": _STOP_MAX_TOKENS,
+        "refusal": _STOP_SAFETY,
+        "pause_turn": _STOP_OTHER,
+    },
+    "gemini": {
+        "stop": _STOP_END_TURN,
+        "max_tokens": _STOP_MAX_TOKENS,
+        "safety": _STOP_SAFETY,
+        "recitation": _STOP_SAFETY,
+        "blocklist": _STOP_SAFETY,
+        "prohibited_content": _STOP_SAFETY,
+        "spii": _STOP_SAFETY,
+        "language": _STOP_OTHER,
+        "other": _STOP_OTHER,
+        "malformed_function_call": _STOP_OTHER,
+    },
+    "openai": {
+        "stop": _STOP_END_TURN,
+        "length": _STOP_MAX_TOKENS,
+        "tool_calls": _STOP_TOOL_USE,
+        "function_call": _STOP_TOOL_USE,
+        "content_filter": _STOP_SAFETY,
+    },
+}
+
+
+def _normalize_stop_reason(provider: str, raw: str | None) -> str:
+    if raw is None:
+        return _STOP_OTHER
+    return _STOP_MAPS.get(provider, {}).get(str(raw).lower(), _STOP_OTHER)
 
 
 class Message(TypedDict, total=False):
@@ -66,6 +146,7 @@ class Provider(Protocol):
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]: ...
 
     def complete(
@@ -92,7 +173,7 @@ class ClaudeProvider:
 
     def __init__(
         self,
-        model: str = "claude-sonnet-4-6",
+        model: str = CLAUDE_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
@@ -114,6 +195,7 @@ class ClaudeProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         client = self._ensure_client()
         # Normalize system → blocks with ephemeral cache_control. Caching
@@ -135,6 +217,8 @@ class ClaudeProvider:
         }
         if tools:
             kwargs["tools"] = tools
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         with client.messages.stream(**kwargs) as stream:
             current_tool: dict | None = None
@@ -191,7 +275,7 @@ class ClaudeProvider:
                         usage["cache_read_input_tokens"] = final.usage.cache_read_input_tokens or 0
                     yield {
                         "type": "stop",
-                        "stop_reason": final.stop_reason,
+                        "stop_reason": _normalize_stop_reason("claude", final.stop_reason),
                         "usage": usage,
                     }
 
@@ -211,10 +295,9 @@ class ClaudeProvider:
         if system:
             # No cache_control on complete() — single-shot calls don't
             # repeat the system prompt across turns, so caching has no payoff.
-            if isinstance(system, str):
-                kwargs["system"] = system
-            else:
-                kwargs["system"] = system
+            # String and block-list system prompts pass through as-is; the
+            # Anthropic SDK accepts both shapes natively.
+            kwargs["system"] = system
         if temperature is not None:
             kwargs["temperature"] = temperature
         response = client.messages.create(**kwargs)
@@ -229,7 +312,7 @@ class GeminiProvider:
 
     def __init__(
         self,
-        model: str = "gemini-2.5-pro",
+        model: str = GEMINI_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
@@ -310,6 +393,7 @@ class GeminiProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         if tools:
             # v1 scope: text-only streaming. Tool-using sites should route
@@ -324,6 +408,8 @@ class GeminiProvider:
         sys_text = self._system_text(system)
         if sys_text:
             cfg_kwargs["system_instruction"] = sys_text
+        if temperature is not None:
+            cfg_kwargs["temperature"] = temperature
 
         stream = client.models.generate_content_stream(
             model=self.model,
@@ -331,7 +417,7 @@ class GeminiProvider:
             config=types.GenerateContentConfig(**cfg_kwargs),
         )
         usage_meta = None
-        stop_reason = "end_turn"
+        stop_reason = _STOP_END_TURN
         for chunk in stream:
             if getattr(chunk, "text", None):
                 yield {"type": "text", "text": chunk.text}
@@ -341,7 +427,8 @@ class GeminiProvider:
             for cand in cands:
                 fr = getattr(cand, "finish_reason", None)
                 if fr is not None:
-                    stop_reason = str(fr).lower().split(".")[-1] or stop_reason
+                    raw_tail = str(fr).lower().split(".")[-1]
+                    stop_reason = _normalize_stop_reason("gemini", raw_tail)
 
         usage = {"input_tokens": 0, "output_tokens": 0}
         if usage_meta is not None:
@@ -358,7 +445,7 @@ class OpenAIProvider:
 
     def __init__(
         self,
-        model: str = "gpt-4o",
+        model: str = OPENAI_DEFAULT_MODEL,
         api_key: str | None = None,
     ) -> None:
         self.model = model
@@ -453,6 +540,7 @@ class OpenAIProvider:
         system: str | list,
         tools: list[Tool] | None = None,
         max_tokens: int = 4096,
+        temperature: float | None = None,
     ) -> Iterator[dict]:
         client = self._ensure_client()
         kwargs: dict = {
@@ -464,11 +552,13 @@ class OpenAIProvider:
         }
         if tools:
             kwargs["tools"] = self._translate_tools(tools)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         # Track in-progress tool calls by index — OpenAI deltas reference
         # the same tool by index across chunks.
         tool_calls: dict[int, dict] = {}
-        stop_reason = "end_turn"
+        stop_reason = _STOP_END_TURN
         usage = {"input_tokens": 0, "output_tokens": 0}
 
         for chunk in client.chat.completions.create(**kwargs):
@@ -491,14 +581,20 @@ class OpenAIProvider:
                             "input_json": "",
                         }
                     fn = getattr(tc, "function", None)
-                    if fn is not None:
-                        if getattr(fn, "name", None):
-                            tool_calls[idx]["name"] = fn.name
-                        if getattr(fn, "arguments", None):
-                            tool_calls[idx]["input_json"] += fn.arguments
+                    # Update id + name first so the start check below sees the
+                    # latest state; defer accumulating THIS delta's args until
+                    # after the start check, so the flush below carries only
+                    # args from PREVIOUS deltas.
+                    if fn is not None and getattr(fn, "name", None):
+                        tool_calls[idx]["name"] = fn.name
                     if getattr(tc, "id", None):
                         tool_calls[idx]["id"] = tc.id
-                    # Emit start once we have id+name; emit input deltas as args stream.
+                    # Emit start once we have id+name. Spec requires tool_use_start
+                    # before any tool_use_input for a given tool; if args arrived
+                    # in earlier deltas before name (OpenAI doesn't do this today,
+                    # but the SDK doesn't promise the ordering), flush them now
+                    # as a single tool_use_input so consumers see a continuous
+                    # JSON stream.
                     if not tool_calls[idx].get("_started") and tool_calls[idx]["id"] and tool_calls[idx]["name"]:
                         tool_calls[idx]["_started"] = True
                         yield {
@@ -509,17 +605,21 @@ class OpenAIProvider:
                                 "input_json": "",
                             },
                         }
+                        if tool_calls[idx]["input_json"]:
+                            yield {
+                                "type": "tool_use_input",
+                                "partial_json": tool_calls[idx]["input_json"],
+                            }
                     if fn is not None and getattr(fn, "arguments", None):
-                        yield {
-                            "type": "tool_use_input",
-                            "partial_json": fn.arguments,
-                        }
+                        tool_calls[idx]["input_json"] += fn.arguments
+                        if tool_calls[idx].get("_started"):
+                            yield {
+                                "type": "tool_use_input",
+                                "partial_json": fn.arguments,
+                            }
             fr = getattr(choice, "finish_reason", None)
             if fr is not None:
-                # Map OpenAI finish_reason → canonical stop_reason naming
-                stop_reason = "tool_use" if fr == "tool_calls" else (
-                    "end_turn" if fr == "stop" else fr
-                )
+                stop_reason = _normalize_stop_reason("openai", fr)
 
         # Close out any in-progress tool calls.
         for tc in tool_calls.values():

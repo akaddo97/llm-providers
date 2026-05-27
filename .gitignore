@@ -17,6 +17,10 @@ venv/
 env/
 ENV/
 
+# Lockfiles — this is a library, not an app, so users resolve fresh
+uv.lock
+poetry.lock
+
 # Test / coverage
 .pytest_cache/
 .coverage
