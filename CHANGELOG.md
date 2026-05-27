@@ -26,7 +26,7 @@ All notable changes to this project are documented in this file. The format foll
 ## [0.1.0] — 2026-05-06
 
 ### Added
-- Initial extract from `aks_claude_data`: `Provider` Protocol declaring `chat()` + `complete()` + `name` + `model`.
+- Initial extract from internal tooling: `Provider` Protocol declaring `chat()` + `complete()` + `name` + `model`.
 - `ClaudeProvider`, `GeminiProvider`, `OpenAIProvider` — concrete implementations translating the canonical surface to each native SDK shape.
 - `get_provider(name=None, **kwargs)` registry-backed factory; `default_provider_name()` helper reading `LLM_PROVIDER` env var with a `claude` fallback.
 - Streaming chunk contract: `text`, `tool_use_start`, `tool_use_input`, `tool_use_end`, `stop`. `tool_use_end` carries fully-parsed input so callers don't rebuild JSON.
