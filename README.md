@@ -4,7 +4,7 @@
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Lightweight Protocol-based abstraction for LLM providers — Claude (Anthropic), Gemini (Google), OpenAI. One canonical interface, three reference implementations, ~250 lines, MIT-licensed.
+Lightweight Protocol-based abstraction for LLM providers — Claude (Anthropic), Gemini (Google), OpenAI. One canonical interface, three reference implementations, MIT-licensed.
 
 ## What it is
 
