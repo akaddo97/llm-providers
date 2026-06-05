@@ -4,7 +4,7 @@
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Lightweight Protocol-based abstraction for LLM providers — Claude (Anthropic), Gemini (Google), OpenAI. One canonical interface, three reference implementations, MIT-licensed.
+Lightweight Protocol-based abstraction for LLM providers — Claude (Anthropic), Gemini (Google), OpenAI, and any OpenAI-compatible endpoint (DeepSeek, Ollama, vLLM, Groq, …). One canonical interface, four reference implementations, MIT-licensed.
 
 ## What it is
 
@@ -28,6 +28,27 @@ Or pin one explicitly:
 
 ```python
 prov = get_provider("openai", model="gpt-4o-mini")
+```
+
+### OpenAI-compatible endpoints (DeepSeek, Ollama, local models)
+
+Every backend that speaks the OpenAI `/chat/completions` wire format — DeepSeek, Ollama, vLLM, llama.cpp, LM Studio, Groq, Together, OpenRouter — goes through one adapter, `OpenAICompatibleProvider`. Presets fill in the base URL and key env var for you:
+
+```python
+prov = get_provider("deepseek")                  # DEEPSEEK_API_KEY; model deepseek-chat
+prov = get_provider("ollama", model="llama3.1")  # local, no key needed
+```
+
+Presets (each supplies base_url + key env; pass `model=` where the preset has no default): `deepseek` · `ollama` · `groq` · `together` · `openrouter` · `fireworks` · `mistral`. Anything else — a vLLM box, an in-house gateway — needs no preset, just a base URL:
+
+```python
+prov = get_provider("openai-compatible", base_url="http://localhost:8000/v1", model="my-model")
+```
+
+Make DeepSeek (or any preset) the process-wide default the same way as the built-ins:
+
+```bash
+LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=... python myscript.py
 ```
 
 ## Why it exists
@@ -58,6 +79,7 @@ Set the keys you'll use:
 export ANTHROPIC_API_KEY=...
 export GEMINI_API_KEY=...
 export OPENAI_API_KEY=...
+export DEEPSEEK_API_KEY=...   # or GROQ_API_KEY / TOGETHER_API_KEY / … for other OpenAI-compatible presets
 ```
 
 You only need keys for the providers you actually instantiate — clients are lazy.
@@ -103,6 +125,7 @@ Tool definitions use the Anthropic shape `{name, description, input_schema}`. Ea
 | Claude (Anthropic) | ✓ | ✓ | ✓ | ✓ (ephemeral, system block) |
 | Gemini (Google) | ✓ | ✓ (text only) | ✗ (v0.1 limit — see `## Limits`) | — |
 | OpenAI | ✓ | ✓ | ✓ | server-side (not surfaced in usage chunk) |
+| OpenAI-compatible (DeepSeek, Ollama, Groq, …) | ✓ | ✓ | ✓ | endpoint-dependent |
 
 ## Single-shot completion
 
@@ -122,13 +145,14 @@ text = prov.complete(
 
 - `Provider` — `Protocol` class declaring `chat()` + `complete()` + `name` + `model`.
 - `ClaudeProvider`, `GeminiProvider`, `OpenAIProvider` — concrete implementations. Each translates the canonical surface to its native SDK shape.
-- `get_provider(name=None, **kwargs)` — registry-backed factory. `name=None` reads `LLM_PROVIDER` env var with a `claude` fallback. Extra kwargs (`model`, `api_key`) flow through to the provider constructor.
+- `OpenAICompatibleProvider` — subclass of `OpenAIProvider` that points the OpenAI SDK at any `/chat/completions` endpoint via `base_url` + a configurable key env (DeepSeek, Ollama, vLLM, Groq, …). It inherits the request / streaming / tool-use translation unchanged.
+- `get_provider(name=None, **kwargs)` — registry-backed factory. `name=None` reads `LLM_PROVIDER` env var with a `claude` fallback. Preset names (`deepseek`, `ollama`, `groq`, …) and `openai-compatible` route to `OpenAICompatibleProvider`. Extra kwargs (`model`, `api_key`, `base_url`) flow through to the provider constructor.
 - `default_provider_name()` — the helper. Read it instead of hard-coding a provider string anywhere.
 - All clients are **lazy**: missing API keys are fine at construction; the error surfaces only when you call `chat()` / `complete()`.
 
 System prompt translation, message-role translation (`assistant` → `model` for Gemini, system message prepending for OpenAI), and tool-schema translation all happen inside the provider. Callers see one shape.
 
-35 tests, three Python versions in CI, fully mocked — `pytest tests/` runs offline.
+45 tests, three Python versions in CI, fully mocked — `pytest tests/` runs offline.
 
 ## Limits
 

@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file. The format foll
 ## [Unreleased]
 
 ### Added
+- `OpenAICompatibleProvider` — one adapter for any OpenAI-compatible `/chat/completions` endpoint (DeepSeek, Ollama, vLLM, llama.cpp, Groq, Together, OpenRouter, Fireworks, Mistral, or a custom gateway). Subclasses `OpenAIProvider` and swaps only the client `base_url` + key source, inheriting the request / streaming / tool-use translation unchanged.
+- `get_provider()` presets: `deepseek`, `ollama`, `groq`, `together`, `openrouter`, `fireworks`, `mistral` (each fills in base_url + key env), plus `openai-compatible` / `custom` for a hand-supplied `base_url`. `LLM_PROVIDER=deepseek` makes DeepSeek the process default.
+- `DEEPSEEK_DEFAULT_MODEL` constant (`deepseek-chat`), exported alongside the other per-provider defaults.
 - `temperature` keyword threaded through `chat()` on all three providers (previously `complete()`-only).
 - `__version__` exposed on the package via `importlib.metadata`, with a fallback to the in-tree constant for editable / source-tree imports.
 - Provider capability matrix in the README (streaming, tool-use, prompt-caching support per provider).

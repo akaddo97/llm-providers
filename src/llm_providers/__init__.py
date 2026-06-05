@@ -65,9 +65,11 @@ __all__ = [
     "ClaudeProvider",
     "GeminiProvider",
     "OpenAIProvider",
+    "OpenAICompatibleProvider",
     "CLAUDE_DEFAULT_MODEL",
     "GEMINI_DEFAULT_MODEL",
     "OPENAI_DEFAULT_MODEL",
+    "DEEPSEEK_DEFAULT_MODEL",
     "get_provider",
     "default_provider_name",
 ]
@@ -79,6 +81,12 @@ __all__ = [
 CLAUDE_DEFAULT_MODEL = "claude-sonnet-4-6"
 GEMINI_DEFAULT_MODEL = "gemini-2.5-pro"
 OPENAI_DEFAULT_MODEL = "gpt-4o"
+# Default for the DeepSeek preset (an OpenAI-compatible endpoint). Other
+# OpenAI-compatible presets leave the model unset — you name the one your
+# endpoint serves. `deepseek-reasoner` also works; its chain-of-thought lands
+# in a separate `reasoning_content` field that complete()/chat() ignore, so
+# callers get the answer, not the scratchpad.
+DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
 
 
 # Canonical stop_reason vocabulary — see module docstring.
@@ -639,6 +647,68 @@ class OpenAIProvider:
         yield {"type": "stop", "stop_reason": stop_reason, "usage": usage}
 
 
+# --- OpenAI-compatible (DeepSeek, Ollama, vLLM, llama.cpp, Groq, ...) ---
+
+
+class OpenAICompatibleProvider(OpenAIProvider):
+    """One adapter for every OpenAI-compatible ``/chat/completions`` backend.
+
+    DeepSeek, Ollama, vLLM, llama.cpp, LM Studio, Groq, Together, OpenRouter,
+    Fireworks, Mistral, or your own gateway — they all speak the same wire
+    format the OpenAI SDK emits. So this reuses ``OpenAIProvider``'s request,
+    streaming, and tool-use translation wholesale; only the client's
+    ``base_url`` and key source differ.
+
+    Point it at anything::
+
+        OpenAICompatibleProvider(
+            base_url="https://api.deepseek.com",
+            model="deepseek-chat",
+            api_key_env="DEEPSEEK_API_KEY",
+            name="deepseek",
+        )
+
+    Self-hosted backends (Ollama, llama.cpp, vLLM) need no key: pass
+    ``api_key_env=""`` and a placeholder is sent (the SDK requires a
+    non-empty string, the server ignores it). For the common providers use
+    the presets via ``get_provider("deepseek")`` etc. — see ``get_provider``.
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        *,
+        model: str | None = None,
+        api_key: str | None = None,
+        api_key_env: str = "OPENAI_API_KEY",
+        name: str = "openai-compatible",
+    ) -> None:
+        if not base_url:
+            raise ValueError(
+                "OpenAICompatibleProvider requires a base_url "
+                "(e.g. https://api.deepseek.com)"
+            )
+        if not model:
+            raise ValueError(
+                f"OpenAICompatibleProvider requires a model for {name!r} — "
+                "pass model=... (the model id your endpoint serves)"
+            )
+        super().__init__(model=model, api_key=api_key)
+        self.base_url = base_url.rstrip("/")
+        self.name = name  # instance attr shadows OpenAIProvider.name ("openai")
+        self._api_key_env = api_key_env
+
+    def _ensure_client(self):
+        if self._client is None:
+            from openai import OpenAI
+            key = self._api_key
+            if not key and self._api_key_env:
+                key = os.environ.get(self._api_key_env)
+            # Self-hosted backends accept any key; the SDK still wants a string.
+            self._client = OpenAI(api_key=key or "not-needed", base_url=self.base_url)
+        return self._client
+
+
 # --- registry + selection ---
 
 
@@ -649,18 +719,59 @@ _PROVIDERS: dict[str, type] = {
 }
 
 
+# OpenAI-compatible endpoints served through OpenAICompatibleProvider.
+# (base_url, api_key_env, default_model). default_model is None where there's
+# no single obvious choice — pass model=... for those. base_urls are the
+# providers' documented OpenAI-compatible roots; the SDK appends
+# /chat/completions. Bring any other endpoint with
+# get_provider("openai-compatible", base_url=..., model=...).
+_OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str, str | None]] = {
+    "deepseek":   ("https://api.deepseek.com",              "DEEPSEEK_API_KEY",   DEEPSEEK_DEFAULT_MODEL),
+    "ollama":     ("http://localhost:11434/v1",             "",                   None),
+    "groq":       ("https://api.groq.com/openai/v1",        "GROQ_API_KEY",       None),
+    "together":   ("https://api.together.xyz/v1",           "TOGETHER_API_KEY",   None),
+    "openrouter": ("https://openrouter.ai/api/v1",          "OPENROUTER_API_KEY", None),
+    "fireworks":  ("https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY",  None),
+    "mistral":    ("https://api.mistral.ai/v1",             "MISTRAL_API_KEY",    None),
+}
+
+# Names that mean "I'll supply base_url + model myself".
+_OPENAI_COMPATIBLE_ALIASES = ("openai-compatible", "custom")
+
+
 def default_provider_name() -> str:
     """Return the configured default provider name.
 
     Reads `LLM_PROVIDER` env var with `claude` fallback. Other modules
     import this helper so the literal `claude` string lives only here.
+    Set `LLM_PROVIDER=deepseek` (+ `DEEPSEEK_API_KEY`) to default to DeepSeek.
     """
     return os.environ.get("LLM_PROVIDER", "claude")
 
 
 def get_provider(name: str | None = None, **kwargs) -> Provider:
+    """Construct a provider by name.
+
+    Built-ins: ``claude``, ``gemini``, ``openai``. OpenAI-compatible presets:
+    ``deepseek``, ``ollama``, ``groq``, ``together``, ``openrouter``,
+    ``fireworks``, ``mistral`` (each fills in base_url + key env; pass
+    ``model=`` where the preset has no default). Anything else OpenAI-shaped:
+    ``get_provider("openai-compatible", base_url=..., model=...)``. Extra
+    kwargs flow to the constructor.
+    """
     if name is None:
         name = default_provider_name()
-    if name not in _PROVIDERS:
-        raise ValueError(f"unknown provider: {name!r}; known: {list(_PROVIDERS)}")
-    return _PROVIDERS[name](**kwargs)
+    if name in _PROVIDERS:
+        return _PROVIDERS[name](**kwargs)
+    if name in _OPENAI_COMPATIBLE_PRESETS:
+        base_url, api_key_env, default_model = _OPENAI_COMPATIBLE_PRESETS[name]
+        kwargs.setdefault("base_url", base_url)
+        kwargs.setdefault("api_key_env", api_key_env)
+        kwargs.setdefault("name", name)
+        if default_model is not None:
+            kwargs.setdefault("model", default_model)
+        return OpenAICompatibleProvider(**kwargs)
+    if name in _OPENAI_COMPATIBLE_ALIASES:
+        return OpenAICompatibleProvider(**kwargs)  # caller supplies base_url + model
+    known = sorted({*_PROVIDERS, *_OPENAI_COMPATIBLE_PRESETS, *_OPENAI_COMPATIBLE_ALIASES})
+    raise ValueError(f"unknown provider: {name!r}; known: {known}")
